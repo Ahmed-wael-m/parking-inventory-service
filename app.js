@@ -1,3 +1,4 @@
+const { writeLog } = require('./src/config/cloudwatch');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -14,7 +15,13 @@ function createApp(repo, c) {
   app.use((req,res,next) => { res.set('X-Instance-ID', instanceId); next(); });
   app.use((req, res, next) => {
     const start = Date.now();
-    res.on('finish', () => console.log(JSON.stringify({ instanceId, method: req.method, status: res.statusCode, route: req.route?.path || 'unmatched', ms: Date.now()-start })));
+   res.on('finish', () => writeLog({
+  instanceId,
+  method: req.method,
+  status: res.statusCode,
+  route: req.route?.path || 'unmatched',
+  ms: Date.now() - start
+}));
     next();
   });
   app.get('/health', (req,res) => res.json({ status: 'ok', service: 'inventory', instanceId, port: c.port || req.socket.localPort }));
