@@ -1,0 +1,1 @@
+{"Version":"2012-10-17","Statement":[{"Sid":"InventoryTablesOnly","Effect":"Allow","Action":["dynamodb:GetItem","dynamodb:Scan","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem"],"Resource":["arn:aws:dynamodb:us-east-1:ACCOUNT_ID:table/ParkingZones","arn:aws:dynamodb:us-east-1:ACCOUNT_ID:table/ParkingSpots"]}]}
