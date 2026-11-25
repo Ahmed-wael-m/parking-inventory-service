@@ -1,0 +1,32 @@
+{
+  "name": "parking-inventory-service",
+  "version": "2.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "setup": "node scripts/setup.js",
+    "test": "node --test test/service.test.js test/schedule.test.js test/api.test.js test/proxy.test.js",
+    "test:db": "node --test test/dynamodb.test.js",
+    "test:service": "node --test test/service.test.js test/schedule.test.js",
+    "proxy": "node scripts/local-proxy.js",
+    "test:proxy": "node --test test/proxy.test.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.700.0",
+    "@aws-sdk/lib-dynamodb": "^3.700.0",
+    "@smithy/node-http-handler": "^4.0.0",
+    "express": "^5.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.0",
+    "helmet": "^8.1.0",
+    "express-rate-limit": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "serverless-http": "^3.2.0"
+  }
+}
