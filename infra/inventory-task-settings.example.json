@@ -1,0 +1,18 @@
+
+{
+  "environment": {
+    "AWS_REGION": "us-east-1",
+    "DYNAMODB_ENDPOINT": "http://localhost:4566",
+    "PORT": "3002",
+    "BIND_HOST": "127.0.0.1",
+    "ZONES_TABLE": "ParkingZones_test_local",
+    "SPOTS_TABLE": "ParkingSpots_test_local",
+    "INVENTORY_SAFETY_MODE": "isolated",
+    "INVENTORY_HOLDS_READY": "false",
+    "RATE_LIMIT_MAX": "120",
+    "CORS_ORIGINS": "http://localhost:8080",
+    "USE_SECRETS_MANAGER": "true",
+    "USE_CLOUDWATCH": "true"
+  },
+  "secretNames": {}
+}

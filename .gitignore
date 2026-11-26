@@ -5,3 +5,5 @@ node_modules/
 *.log
 coverage/
 infra/local/
+.local/
+infra/inventory-task-settings.json
