@@ -32,3 +32,72 @@ test('rate limiter returns 429',async()=>{const limited=createApp(memory(),{...c
 test('hold endpoints are service-token only and private schedule never leaks',async()=>{const start_at=new Date(Date.now()+60000).toISOString(),end_at=new Date(Date.now()+3600000).toISOString(),body={spot_id:'A1',hold_id:'api-hold',start_at,end_at};assert.equal((await call(p+'/holds',{method:'POST',body})).status,401);assert.equal((await call(p+'/holds',{method:'POST',auth:c.token,body})).body.data.status,'HELD');assert.equal((await call(p+'/holds',{method:'POST',auth:c.token,body:{...body,hold_id:'competing'}})).status,409);assert.equal((await call(p+'/spots/A1')).body.data.schedule,undefined);assert.equal((await call(p+'/holds/A1/api-hold/confirm',{method:'POST',auth:c.token,body:{}})).body.data.status,'CONFIRMED');assert.equal((await call(p+'/holds/A1/api-hold/release',{method:'POST',auth:c.token,body:{}})).body.data.status,'RELEASED');});
 
 test('incident location token reads locations but cannot hold or access allocation catalogue',async()=>{assert.equal((await call(p+'/internal/spots/A1',{auth:c.locationToken})).status,200);assert.equal((await call(p+'/internal/zones/zone_1',{auth:c.locationToken})).status,200);assert.equal((await call(p+'/spots',{auth:c.locationToken})).status,401);assert.equal((await call(p+'/holds',{method:'POST',auth:c.locationToken,body:{}})).status,401);});
+test('64-character spot ID works across inventory and hold APIs', async () => {
+  const spot_id = 'A'.repeat(64);
+
+  const body = {
+    spot_id,
+    zone_id: 'zone_1',
+    spot_type: 'standard'
+  };
+
+  // Create a valid spot
+  const created = await call(p + '/spots', {
+    method: 'POST',
+    body
+  });
+  assert.equal(created.status, 201);
+
+  // Reject a spot ID longer than 64 characters
+  const invalid = await call(p + '/spots', {
+    method: 'POST',
+    body: { ...body, spot_id: 'A'.repeat(65) }
+  });
+  assert.equal(invalid.status, 400);
+
+  // Retrieve the spot
+  const found = await call(p + '/spots/' + spot_id);
+  assert.equal(found.status, 200);
+  assert.equal(found.body.data.spot_id, spot_id);
+
+  // Create a temporary hold
+  const hold = await call(p + '/holds', {
+    method: 'POST',
+    auth: c.token,
+    body: {
+      spot_id,
+      hold_id: 'long-id-test',
+      start_at: new Date(Date.now() + 60000).toISOString(),
+      end_at: new Date(Date.now() + 3600000).toISOString()
+    }
+  });
+  assert.equal(hold.status, 200);
+  assert.equal(hold.body.data.status, 'HELD');
+
+  const holdPath = p + '/holds/' + spot_id + '/long-id-test';
+
+  // Confirm the hold
+  const confirmed = await call(holdPath + '/confirm', {
+    method: 'POST',
+    auth: c.token,
+    body: {}
+  });
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.body.data.status, 'CONFIRMED');
+
+  // Retrieve hold status
+  const status = await call(holdPath, {
+    auth: c.token
+  });
+  assert.equal(status.status, 200);
+  assert.equal(status.body.data.status, 'CONFIRMED');
+
+  // Release the booking
+  const released = await call(holdPath + '/release', {
+    method: 'POST',
+    auth: c.token,
+    body: {}
+  });
+  assert.equal(released.status, 200);
+  assert.equal(released.body.data.status, 'RELEASED');
+});

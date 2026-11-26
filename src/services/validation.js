@@ -2,7 +2,17 @@ const { bad } = require('../middleware/errors');
 // Initial types are a proposed local allowlist; confirm with Allocation before integration.
 const TYPES = ['standard', 'accessible', 'ev'];
 function id(value, field) {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(value)) throw bad(`${field} must be 1–40 letters, numbers, underscores or hyphens.`);
+  const maxLength = field === 'spot_id' ? 64 : 40;
+
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > maxLength ||
+    /[^A-Za-z0-9_-]/.test(value)
+  ) {
+    throw bad(`${field} must be 1–${maxLength} letters, numbers, underscores or hyphens.`);
+  }
+
   return value;
 }
 function type(value) { if (!TYPES.includes(value)) throw bad('spot_type must be standard, accessible or ev.'); return value; }
