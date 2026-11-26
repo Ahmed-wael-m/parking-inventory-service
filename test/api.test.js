@@ -101,3 +101,63 @@ test('64-character spot ID works across inventory and hold APIs', async () => {
   assert.equal(released.status, 200);
   assert.equal(released.body.data.status, 'RELEASED');
 });
+test('hold API validates expected zone and spot type', async () => {
+  const body = {
+    spot_id: 'A1',
+    hold_id: 'expected-api-test',
+    start_at: new Date(Date.now() + 60000).toISOString(),
+    end_at: new Date(Date.now() + 3600000).toISOString(),
+    expected_zone_id: 'zone_1',
+    expected_spot_type: 'standard'
+  };
+
+  const options = {
+    method: 'POST',
+    auth: c.token
+  };
+
+  // Incorrect expected zone
+  const wrongZone = await call(p + '/holds', {
+    ...options,
+    body: { ...body, expected_zone_id: 'wrong_zone' }
+  });
+  assert.equal(wrongZone.status, 409);
+
+  // Incorrect expected spot type
+  const wrongType = await call(p + '/holds', {
+    ...options,
+    body: { ...body, expected_spot_type: 'accessible' }
+  });
+  assert.equal(wrongType.status, 409);
+
+  // Invalid expected spot type
+  const invalidType = await call(p + '/holds', {
+    ...options,
+    body: { ...body, expected_spot_type: 'invalid' }
+  });
+  assert.equal(invalidType.status, 400);
+
+  // Correct zone and spot type
+  const valid = await call(p + '/holds', {
+    ...options,
+    body
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(valid.body.data.status, 'HELD');
+
+  // Retry the same request
+  const retry = await call(p + '/holds', {
+    ...options,
+    body
+  });
+  assert.equal(retry.status, 200);
+  assert.deepEqual(retry.body.data, valid.body.data);
+
+  // Release the test hold
+  const released = await call(
+    p + '/holds/A1/expected-api-test/release',
+    { ...options, body: {} }
+  );
+  assert.equal(released.status, 200);
+  assert.equal(released.body.data.status, 'RELEASED');
+});

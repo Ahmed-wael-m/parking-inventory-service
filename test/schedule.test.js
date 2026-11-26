@@ -16,3 +16,91 @@ test('renewal checks extra interval and cannot shorten',async()=>{const {a}=awai
 test('invalid dates and missing cutover are rejected',async()=>{const {a,repo}=await fixture();await assert.rejects(a.hold(body('invalid',{start_at:'2026-02-30T09:00:00Z'})),{status:400});await assert.rejects(a.hold(body('invalid',{end_at:start})),{status:400});const c=inventory(repo,{mode:'connected'});await assert.rejects(c.hold(body('blocked')),{status:503});assert.equal((await c.capacity())[0].utilization_status,'UNKNOWN');});
 test('catalogue never leaks holds, and booked spots still included',async()=>{const {a}=await fixture();await a.hold(body('one'));assert.deepEqual(await a.search({},true),[{spot_id:'A1',zone_id:'z',spot_type:'standard',active:true}]);assert.equal((await a.spot('A1')).schedule,undefined);assert.equal((await a.search({}))[0].schedule,undefined);});
 test('unconfirmed database outcome not automatically retried',async()=>{const {a,repo}=await fixture();let count=0;repo.updateSpot=async()=>{count++;return repo.fail();};await assert.rejects(a.hold(body('one')),{status:503});assert.equal(count,1);});
+test('hold accepts matching expected zone and spot type', async () => {
+  const { a, b } = await fixture();
+
+  const request = body('expected-match', {
+    expected_zone_id: 'z',
+    expected_spot_type: 'standard'
+  });
+
+  const h = await a.hold(request);
+
+  assert.equal(h.status, 'HELD');
+
+  // Retrying the same valid request remains safe.
+  assert.deepEqual(await b.hold(request), h);
+});
+
+test('hold rejects an incorrect expected zone', async () => {
+  const { a } = await fixture();
+
+  await assert.rejects(
+    a.hold(body('wrong-zone', {
+      expected_zone_id: 'another_zone',
+      expected_spot_type: 'standard'
+    })),
+    { status: 409 }
+  );
+
+  assert.equal((await a.availability(q)).spots.length, 1);
+});
+
+test('hold rejects an outdated expected spot type', async () => {
+  const { a } = await fixture();
+
+  await a.updateSpot('A1', {
+    spot_type: 'accessible'
+  });
+
+  await assert.rejects(
+    a.hold(body('wrong-type', {
+      expected_zone_id: 'z',
+      expected_spot_type: 'standard'
+    })),
+    { status: 409 }
+  );
+
+  assert.equal((await a.availability(q)).spots.length, 1);
+});
+
+test('hold rejects invalid expected zone and type values', async () => {
+  const { a } = await fixture();
+
+  await assert.rejects(
+    a.hold(body('invalid-zone', {
+      expected_zone_id: 'zone@123'
+    })),
+    { status: 400 }
+  );
+
+  await assert.rejects(
+    a.hold(body('invalid-type', {
+      expected_spot_type: 'invalid'
+    })),
+    { status: 400 }
+  );
+});
+
+test('concurrent hold and conflicting spot type change cannot both succeed', async () => {
+  const { a, b } = await fixture();
+
+  const results = await Promise.allSettled([
+    a.hold(body('type-race', {
+      expected_zone_id: 'z',
+      expected_spot_type: 'standard'
+    })),
+    b.updateSpot('A1', {
+      spot_type: 'accessible'
+    })
+  ]);
+
+  assert.equal(
+    results.filter(r => r.status === 'fulfilled').length,
+    1
+  );
+
+  const rejected = results.find(r => r.status === 'rejected');
+
+  assert.equal(rejected.reason.status, 409);
+});

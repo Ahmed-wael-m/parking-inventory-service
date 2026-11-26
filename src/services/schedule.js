@@ -41,22 +41,88 @@ function scheduleService(repo, c, getSpot, revise) {
   }
   function output(id,h,now) { return { spot_id:id,...h,status:state(h,now) }; }
   async function hold(body) {
-    v.fields(body,['spot_id','hold_id','start_at','end_at']);
-    const id=v.id(body.spot_id,'spot_id'), hold_id=v.id(body.hold_id,'hold_id');
-    const period=interval(body.start_at,body.end_at);
-    return change(id,(s,now)=>{
-      const list=s.schedule||[], old=list.find(h=>h.hold_id===hold_id);
-      if(old) {
-        if(old.start_at!==period.start_at || (old.original_end_at||old.end_at)!==period.end_at || !live(old,now)) throw conflict('Hold ID already used or no longer active.');
-        return {value:output(id,old,now)};
+    v.fields(body, [
+      'spot_id',
+      'hold_id',
+      'start_at',
+      'end_at',
+      'expected_zone_id',
+      'expected_spot_type'
+    ]);
+
+    const id = v.id(body.spot_id, 'spot_id');
+    const hold_id = v.id(body.hold_id, 'hold_id');
+    const period = interval(body.start_at, body.end_at);
+
+    const expectedZone = body.expected_zone_id === undefined
+      ? undefined
+      : v.id(body.expected_zone_id, 'expected_zone_id');
+
+    const expectedType = body.expected_spot_type === undefined
+      ? undefined
+      : v.type(body.expected_spot_type);
+
+    return change(id, (s, now) => {
+
+      // Reject outdated catalogue information.
+      if (expectedZone !== undefined && s.zone_id !== expectedZone) {
+        throw conflict('Parking spot zone no longer matches the expected zone.');
       }
-      if(Date.parse(period.start_at)<now) throw bad('New hold start_at must not be in the past.');
-      if(!s.active || blocking(s,Date.parse(period.start_at),Date.parse(period.end_at),now)) throw conflict('Spot is inactive or overlaps another hold/booking.');
-      if(list.length>=MAX_RECORDS) throw new ApiError(503,'SCHEDULE_LIMIT','Spot history limit reached; controlled archival required.');
-      const h={hold_id,...period,original_end_at:period.end_at,status:'HELD',expires_at:new Date(Math.min(now+HOLD_MS,Date.parse(period.end_at))).toISOString()};
-      return {schedule:[...list,h],value:output(id,h,now)};
+
+      if (expectedType !== undefined && s.spot_type !== expectedType) {
+        throw conflict('Parking spot type no longer matches the expected type.');
+      }
+
+      const list = s.schedule || [];
+      const old = list.find(h => h.hold_id === hold_id);
+
+      if (old) {
+        if (
+          old.start_at !== period.start_at ||
+          (old.original_end_at || old.end_at) !== period.end_at ||
+          !live(old, now)
+        ) {
+          throw conflict('Hold ID already used or no longer active.');
+        }
+
+        return { value: output(id, old, now) };
+      }
+
+      if (Date.parse(period.start_at) < now) {
+        throw bad('New hold start_at must not be in the past.');
+      }
+
+      if (
+        !s.active ||
+        blocking(s, Date.parse(period.start_at), Date.parse(period.end_at), now)
+      ) {
+        throw conflict('Spot is inactive or overlaps another hold/booking.');
+      }
+
+      if (list.length >= MAX_RECORDS) {
+        throw new ApiError(
+          503,
+          'SCHEDULE_LIMIT',
+          'Spot history limit reached; controlled archival required.'
+        );
+      }
+
+      const h = {
+        hold_id,
+        ...period,
+        original_end_at: period.end_at,
+        status: 'HELD',
+        expires_at: new Date(
+          Math.min(now + HOLD_MS, Date.parse(period.end_at))
+        ).toISOString()
+      };
+
+      return {
+        schedule: [...list, h],
+        value: output(id, h, now)
+      };
     });
-  }
+}
   async function transition(id, key, action, body) {
     v.id(key,'hold_id');
     if(action==='extend') v.fields(body,['end_at']);

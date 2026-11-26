@@ -21,7 +21,7 @@ Base `http://localhost:3002/api/inventory`. `GET /health` outside base: liveness
 | GET /internal/capacity | Internal | Same as capacity for pricing |
 | GET /internal/spots/:id | Location token | Location validation for incident service |
 | GET /internal/zones/:id | Location token | Location validation for incident service |
-| POST /holds | Internal | spot_id, hold_id, start_at, end_at |
+| POST /holds | Internal | spot_id, hold_id, start_at, end_at; optional expected_zone_id, expected_spot_type |
 | GET /holds/:spot/:hold | Internal | Hold status/reconciliation |
 | POST /holds/:spot/:hold/confirm | Internal | {} |
 | POST /holds/:spot/:hold/release | Internal | {} |
@@ -34,3 +34,23 @@ Times use UTC ISO 8601 with seconds, optional milliseconds, e.g. `2026-12-01T09:
 Capacity: optional `at` current or future instant. total, active, inactive, by_type, held, booked, available, occupancy (held+booked), utilization_percent=100*occupancy/total; FULL when active >0 and no active spot free, HIGH at >=80% of total unless FULL, NORMAL otherwise, NO_ACTIVE_CAPACITY when active=0. These are booking-state estimates, not physical occupancy sensors. Threshold 80% and 5-minute lease are proposed defaults, not established team rules. Alerts are returned in API/dashboard; SNS not implemented. Scans are not atomic across spots. Cutover disabled: counts of catalogue still returned, booking metrics null and UNKNOWN; availability and holds return 503. Schedule data is never in browser catalogue/details.
 
 400 validation, 401 credentials, 403 role/origin, 404 missing resource, 409 overlapping/expired/duplicate/concurrent conflict, 413 body limit, 415 media type, 429 rate limiting, 503 unavailable/unconfirmed/cutover/record limit. HS256 claims sub, role, priority, iss, aud, exp; shared values privately agreed. IDs/spot zone immutable. Proposed types standard, accessible, ev; agree with team. Service token is currently Allocation-scoped; do NOT give it to Thabit solely for location checks. Location reads can use JWT or a distinct optional INVENTORY_LOCATION_TOKEN for the two location endpoints; this token cannot call holds. See INTEGRATION.md.
+### Expected zone and spot type validation
+
+Hold creation accepts two optional fields: `expected_zone_id`
+and `expected_spot_type`. Allocation should provide both fields
+to prevent booking a spot using outdated catalogue information.
+
+Inventory validates these fields against the current parking spot
+record during the conditional-write operation. A mismatch returns
+409 Conflict. Invalid field values return 400 Bad Request.
+
+If the fields are omitted, the existing hold creation behavior
+is preserved.
+### Identifier limits
+
+- Parking spot IDs: 1–64 characters.
+- Zone IDs: 1–40 characters.
+- Hold IDs: 1–40 characters.
+
+Identifiers accept only letters, numbers, underscores and hyphens.
+Parking spot IDs must be globally unique.
