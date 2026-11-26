@@ -78,6 +78,99 @@ function inventory(repo, c) {
       return {...base,occupancy:used,held,booked,available,utilization_percent:pct,utilization_status:active===0?'NO_ACTIVE_CAPACITY':available===0?'FULL':pct>=80?'HIGH':'NORMAL',reservation_data:'inventory_schedule'};
     });
   }
+  async function pricingCapacity(query) {
+    scheduling.ready();
+
+    v.fields(query, [
+      'zone_id',
+      'spot_type',
+      'start_at',
+      'end_at',
+      'exclude_spot_id',
+      'exclude_hold_id'
+    ]);
+
+    const zone_id = v.id(query.zone_id, 'zone_id');
+    const spot_type = v.type(query.spot_type);
+
+    const period = interval(query.start_at, query.end_at);
+    const now = scheduling.clock();
+
+    const start = Date.parse(period.start_at);
+    const end = Date.parse(period.end_at);
+
+    if (end <= now) {
+      throw bad('Pricing window must end in the future.');
+    }
+
+    // Both exclusion identifiers must be supplied together.
+    if (
+      (query.exclude_spot_id === undefined) !==
+      (query.exclude_hold_id === undefined)
+    ) {
+      throw bad('Provide both exclude_spot_id and exclude_hold_id.');
+    }
+
+    const excludeSpot = query.exclude_spot_id === undefined
+      ? undefined
+      : v.id(query.exclude_spot_id, 'spot_id');
+
+    const excludeHold = query.exclude_hold_id === undefined
+      ? undefined
+      : v.id(query.exclude_hold_id, 'hold_id');
+
+    // Verify that the requested zone exists.
+    await zone(zone_id);
+
+    // Retrieve active spots matching the requested zone and type.
+    const items = await repo.spots();
+
+    const matching = items.filter(s =>
+      s.active &&
+      s.zone_id === zone_id &&
+      s.spot_type === spot_type
+    );
+
+    const active = matching.length;
+    let booked = 0;
+
+    for (const s of matching) {
+      const hasBooking = (s.schedule || []).some(h => {
+
+        // Exclude the reservation's own booking during renewal.
+        if (
+          s.spot_id === excludeSpot &&
+          h.hold_id === excludeHold
+        ) {
+          return false;
+        }
+
+        // Ignore temporary holds and terminal bookings.
+        if (state(h, now) !== 'CONFIRMED') {
+          return false;
+        }
+
+        // Check whether the booking overlaps the requested period.
+        return Date.parse(h.start_at) < end &&
+          start < Date.parse(h.end_at);
+      });
+
+      // Count each parking spot only once.
+      if (hasBooking) {
+        booked++;
+      }
+    }
+
+    return {
+      zone_id,
+      spot_type,
+      active,
+      booked,
+      utilization_percent: active > 0
+        ? (booked / active) * 100
+        : 0
+    };
+}
   async function alternatives(query) {
     v.fields(query, ['zone_id', 'spot_type', 'min_active']);
     const id = v.id(query.zone_id, 'zone_id'), type = v.type(query.spot_type);
@@ -89,6 +182,6 @@ function inventory(repo, c) {
     const candidates = caps.filter(z => z.zone_id !== id && z.by_type[type].active >= min).map(z => ({ zone_id: z.zone_id, zone_name: z.zone_name, matching_active: z.by_type[type].active })).sort((a,b) => b.matching_active-a.matching_active || a.zone_id.localeCompare(b.zone_id));
     return { requested_zone: id, requested_active: requested.by_type[type].active, minimum_active: min, insufficient_active_capacity: requested.by_type[type].active < min, alternatives: requested.by_type[type].active < min ? candidates : [], basis: 'Active catalogue capacity only; booking availability unknown for these suggestions.' };
   }
-  return { zone, spot:async id=>publicSpot(await spot(id)), availability, hold:scheduling.hold, getHold:scheduling.getHold, transition:scheduling.transition, zones: repo.zones, createZone, updateZone, deleteZone, createSpot, updateSpot, deleteSpot, search, capacity, alternatives };
+ return { zone, spot:async id=>publicSpot(await spot(id)), availability, hold:scheduling.hold, getHold:scheduling.getHold, transition:scheduling.transition, zones: repo.zones, createZone, updateZone, deleteZone, createSpot, updateSpot, deleteSpot, search, capacity, pricingCapacity, alternatives };
 }
 module.exports = { inventory };

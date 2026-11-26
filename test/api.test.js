@@ -161,3 +161,151 @@ test('hold API validates expected zone and spot type', async () => {
   assert.equal(released.status, 200);
   assert.equal(released.body.data.status, 'RELEASED');
 });
+test('internal pricing API returns correct occupancy and supports exclusion', async () => {
+  const zone_id = 'pricing_zone';
+
+  // Create a separate zone for pricing tests.
+  assert.equal((await call(p + '/zones', {
+    method: 'POST',
+    body: {
+      zone_id,
+      zone_name: 'Pricing Test Zone'
+    }
+  })).status, 201);
+
+  // Create two active spots and one inactive spot.
+  for (const spot_id of ['P1', 'P2', 'P3']) {
+    assert.equal((await call(p + '/spots', {
+      method: 'POST',
+      body: {
+        spot_id,
+        zone_id,
+        spot_type: 'standard',
+        active: spot_id !== 'P3'
+      }
+    })).status, 201);
+  }
+
+  const start_at = new Date(Date.now() + 60000).toISOString();
+  const end_at = new Date(Date.now() + 3600000).toISOString();
+
+  // Create a confirmed booking on P1.
+  assert.equal((await call(p + '/holds', {
+    method: 'POST',
+    auth: c.token,
+    body: {
+      spot_id: 'P1',
+      hold_id: 'pricing-confirmed',
+      start_at,
+      end_at
+    }
+  })).status, 200);
+
+  assert.equal((await call(
+    p + '/holds/P1/pricing-confirmed/confirm', {
+      method: 'POST',
+      auth: c.token,
+      body: {}
+    }
+  )).body.data.status, 'CONFIRMED');
+
+  // Create a temporary hold on P2.
+  assert.equal((await call(p + '/holds', {
+    method: 'POST',
+    auth: c.token,
+    body: {
+      spot_id: 'P2',
+      hold_id: 'pricing-temporary',
+      start_at,
+      end_at
+    }
+  })).body.data.status, 'HELD');
+
+  const query = new URLSearchParams({
+    zone_id,
+    spot_type: 'standard',
+    start_at,
+    end_at
+  });
+
+  const path = p + '/internal/capacity?' + query.toString();
+
+  // Only the confirmed booking should count.
+  const result = await call(path, {
+    auth: c.token
+  });
+
+  assert.equal(result.status, 200);
+
+  assert.deepEqual(result.body.data, {
+    zone_id,
+    spot_type: 'standard',
+    active: 2,
+    booked: 1,
+    utilization_percent: 50
+  });
+
+  // Exclude the confirmed booking during renewal.
+  const excluded = await call(
+    path + '&exclude_spot_id=P1&exclude_hold_id=pricing-confirmed',
+    { auth: c.token }
+  );
+
+  assert.equal(excluded.status, 200);
+  assert.equal(excluded.body.data.active, 2);
+  assert.equal(excluded.body.data.booked, 0);
+  assert.equal(excluded.body.data.utilization_percent, 0);
+
+  // Incomplete exclusion parameters must be rejected.
+  assert.equal((await call(
+    path + '&exclude_hold_id=pricing-confirmed',
+    { auth: c.token }
+  )).status, 400);
+});
+
+test('pricing API preserves authentication and legacy capacity behavior', async () => {
+  const query = new URLSearchParams({
+    zone_id: 'zone_1',
+    spot_type: 'standard',
+    start_at: new Date(Date.now() + 60000).toISOString(),
+    end_at: new Date(Date.now() + 3600000).toISOString()
+  });
+
+  const path = p + '/internal/capacity?' + query.toString();
+
+  // Only Allocation's internal token is accepted.
+  for (const auth of [null, 'wrong-token', token(), c.locationToken]) {
+    assert.equal((await call(path, { auth })).status, 401);
+  }
+
+  // Preserve the original internal capacity response.
+  const legacy = await call(p + '/internal/capacity', {
+    auth: c.token
+  });
+
+  assert.equal(legacy.status, 200);
+  assert.ok(Array.isArray(legacy.body.data));
+
+  // Preserve capacity queries using a specific time.
+  const at = new Date(Date.now() + 60000).toISOString();
+
+  const snapshot = await call(
+    p + '/internal/capacity?at=' + encodeURIComponent(at),
+    { auth: c.token }
+  );
+
+  assert.equal(snapshot.status, 200);
+  assert.ok(Array.isArray(snapshot.body.data));
+  assert.equal(snapshot.body.data[0].at, at);
+
+  // Preserve the public capacity dashboard.
+  const dashboard = await call(p + '/capacity');
+
+  assert.equal(dashboard.status, 200);
+  assert.ok(Array.isArray(dashboard.body.data));
+
+  // Public capacity must not expose the internal pricing operation.
+  assert.equal((await call(
+    p + '/capacity?' + query.toString()
+  )).status, 400);
+});

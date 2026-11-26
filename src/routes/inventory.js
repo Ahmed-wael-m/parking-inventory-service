@@ -11,7 +11,15 @@ function routes(s, c) {
   // Existing catalogue remains exactly compatible, including inactive and booked spaces.
   r.get('/spots', internal, out(req=>s.search(req.query,true),{catalogue:true}));
   r.get('/internal/availability', internal, out(req=>s.availability(req.query)));
-  r.get('/internal/capacity', internal, out(req=>s.capacity(req.query)));
+  r.get('/internal/capacity', internal, out(req => {
+    const pricing = Object.keys(req.query).some(
+      key => key !== 'at'
+    );
+
+    return pricing
+      ? s.pricingCapacity(req.query)
+      : s.capacity(req.query);
+}));
   r.get('/internal/spots/:id', location, out(req=>s.spot(req.params.id)));
   r.get('/internal/zones/:id', location, out(req=>s.zone(req.params.id)));
   r.post('/holds', internal, out(req=>s.hold(req.body)));

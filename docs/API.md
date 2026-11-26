@@ -18,7 +18,7 @@ Base `http://localhost:3002/api/inventory`. `GET /health` outside base: liveness
 | GET /availability | JWT | start_at, end_at, optional zone_id, spot_type, spot_id |
 | GET /capacity | JWT | optional at (UTC); per-zone counts and alerts |
 | GET /internal/availability | Internal | Same as availability for Allocation |
-| GET /internal/capacity | Internal | Same as capacity for pricing |
+| GET /internal/capacity | Internal | Legacy capacity snapshot or interval-based pricing occupancy |
 | GET /internal/spots/:id | Location token | Location validation for incident service |
 | GET /internal/zones/:id | Location token | Location validation for incident service |
 | POST /holds | Internal | spot_id, hold_id, start_at, end_at; optional expected_zone_id, expected_spot_type |
@@ -54,3 +54,61 @@ is preserved.
 
 Identifiers accept only letters, numbers, underscores and hyphens.
 Parking spot IDs must be globally unique.
+### Dynamic pricing occupancy
+
+GET /api/inventory/internal/capacity
+
+Requires the private Allocation service bearer token.
+
+Required pricing query parameters:
+
+- zone_id
+- spot_type
+- start_at
+- end_at
+
+Optional renewal exclusion parameters:
+
+- exclude_spot_id
+- exclude_hold_id
+
+Both exclusion parameters must be supplied together.
+
+Example request:
+
+GET /api/inventory/internal/capacity?zone_id=zone_1&spot_type=standard&start_at=2026-12-01T09:00:00Z&end_at=2026-12-01T12:00:00Z
+
+Example response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "zone_id": "zone_1",
+    "spot_type": "standard",
+    "active": 5,
+    "booked": 3,
+    "utilization_percent": 60
+  }
+}
+```
+
+Business rules:
+
+- Only active spots matching the requested zone and type are counted.
+- Each spot with at least one live confirmed booking overlapping
+  the requested interval is counted once.
+- Temporary holds, released bookings and ended bookings are excluded.
+- Adjacent booking periods are not considered overlapping.
+- Pricing utilization equals booked divided by active multiplied by 100.
+- Zero active capacity returns zero utilization but does not indicate
+  parking availability.
+- Exclusion applies only to the matching spot ID and hold ID.
+- Pricing occupancy is a snapshot, not an atomic booking guarantee.
+- Allocation remains responsible for calculating the final price.
+- Connected mode without verified cutover returns 503 CUTOVER_REQUIRED.
+
+The existing internal capacity endpoint without pricing parameters,
+including queries using only at, retains its original response structure.
+
+The public capacity dashboard remains unchanged.

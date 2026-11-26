@@ -104,3 +104,217 @@ test('concurrent hold and conflicting spot type change cannot both succeed', asy
 
   assert.equal(rejected.reason.status, 409);
 });
+const pricingQuery = {
+  zone_id: 'z',
+  spot_type: 'standard',
+  start_at: start,
+  end_at: end
+};
+
+async function confirmPricingBooking(a, hold_id, more = {}) {
+  const request = body(hold_id, more);
+
+  await a.hold(request);
+
+  await a.transition(
+    request.spot_id,
+    hold_id,
+    'confirm'
+  );
+}
+
+test('pricing counts distinct confirmed active spots only', async () => {
+  const { a } = await fixture();
+
+  for (const spot_id of ['A2', 'A3', 'A4']) {
+    await a.createSpot({
+      spot_id,
+      zone_id: 'z',
+      spot_type: 'standard'
+    });
+  }
+
+  await a.createSpot({
+    spot_id: 'A5',
+    zone_id: 'z',
+    spot_type: 'standard',
+    active: false
+  });
+
+  await a.createSpot({
+    spot_id: 'A6',
+    zone_id: 'z',
+    spot_type: 'accessible'
+  });
+
+  await a.createZone({
+    zone_id: 'other',
+    zone_name: 'Other Zone'
+  });
+
+  await a.createSpot({
+    spot_id: 'B1',
+    zone_id: 'other',
+    spot_type: 'standard'
+  });
+
+  // Two confirmed bookings on the same spot.
+  await confirmPricingBooking(a, 'first', {
+    end_at: '2026-12-01T10:00:00Z'
+  });
+
+  await confirmPricingBooking(a, 'second', {
+    start_at: '2026-12-01T11:00:00Z',
+    end_at: '2026-12-01T12:00:00Z'
+  });
+
+  // Confirmed booking on another matching spot.
+  await confirmPricingBooking(a, 'third', {
+    spot_id: 'A2',
+    start_at: '2026-12-01T12:00:00Z'
+  });
+
+  // Temporary hold: must not increase pricing occupancy.
+  await a.hold(body('temporary', {
+    spot_id: 'A3'
+  }));
+
+  // Bookings outside the requested type and zone.
+  await confirmPricingBooking(a, 'other-type', {
+    spot_id: 'A6'
+  });
+
+  await confirmPricingBooking(a, 'other-zone', {
+    spot_id: 'B1'
+  });
+
+  const result = await a.pricingCapacity(pricingQuery);
+
+  assert.deepEqual(result, {
+    zone_id: 'z',
+    spot_type: 'standard',
+    active: 4,
+    booked: 2,
+    utilization_percent: 50
+  });
+});
+
+test('pricing excludes only the specified spot and hold', async () => {
+  const { a } = await fixture();
+
+  await a.createSpot({
+    spot_id: 'A2',
+    zone_id: 'z',
+    spot_type: 'standard'
+  });
+
+  await confirmPricingBooking(a, 'same-id');
+
+  await confirmPricingBooking(a, 'same-id', {
+    spot_id: 'A2'
+  });
+
+  const result = await a.pricingCapacity({
+    ...pricingQuery,
+    exclude_spot_id: 'A1',
+    exclude_hold_id: 'same-id'
+  });
+
+  assert.equal(result.active, 2);
+  assert.equal(result.booked, 1);
+  assert.equal(result.utilization_percent, 50);
+});
+
+test('pricing excludes released and non-overlapping bookings', async () => {
+  const { a } = await fixture();
+
+  await confirmPricingBooking(a, 'before', {
+    start_at: '2026-12-01T08:30:00Z',
+    end_at: start
+  });
+
+  await confirmPricingBooking(a, 'after', {
+    start_at: end,
+    end_at: '2026-12-01T15:00:00Z'
+  });
+
+  await confirmPricingBooking(a, 'released');
+
+  await a.transition('A1', 'released', 'release');
+
+  const result = await a.pricingCapacity(pricingQuery);
+
+  assert.equal(result.booked, 0);
+  assert.equal(result.utilization_percent, 0);
+});
+
+test('pricing handles zero active capacity safely', async () => {
+  const { a } = await fixture();
+
+  await a.updateSpot('A1', {
+    active: false
+  });
+
+  const result = await a.pricingCapacity(pricingQuery);
+
+  assert.equal(result.active, 0);
+  assert.equal(result.booked, 0);
+  assert.equal(result.utilization_percent, 0);
+});
+
+test('pricing rejects invalid queries', async () => {
+  const { a } = await fixture();
+
+  await assert.rejects(
+    a.pricingCapacity({
+      ...pricingQuery,
+      spot_type: 'invalid'
+    }),
+    { status: 400 }
+  );
+
+  await assert.rejects(
+    a.pricingCapacity({
+      ...pricingQuery,
+      end_at: start
+    }),
+    { status: 400 }
+  );
+
+  await assert.rejects(
+    a.pricingCapacity({
+      ...pricingQuery,
+      exclude_hold_id: 'one'
+    }),
+    { status: 400 }
+  );
+
+  await assert.rejects(
+    a.pricingCapacity({
+      ...pricingQuery,
+      zone_id: 'missing'
+    }),
+    { status: 404 }
+  );
+});
+
+test('pricing preserves cutover and database failure protection', async () => {
+  const { a, repo } = await fixture();
+
+  const connected = inventory(repo, {
+    mode: 'connected',
+    holdsReady: false
+  });
+
+  await assert.rejects(
+    connected.pricingCapacity(pricingQuery),
+    { status: 503 }
+  );
+
+  repo.spots = repo.fail;
+
+  await assert.rejects(
+    a.pricingCapacity(pricingQuery),
+    { status: 503 }
+  );
+});
